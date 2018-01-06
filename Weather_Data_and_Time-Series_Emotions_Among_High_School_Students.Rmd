@@ -1,0 +1,433 @@
+---
+title: "Weather Data and Time-Series Emotions Among High School Students"
+author: "Marty Moesta"
+advisors: "Prof. Jay Emerson & Prof. Sekhar Tatikonda"
+with help from: "Julia Moeller"
+date: "5/1/2017"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+The rising awareness of developing and understanding emotional intelligence in pre-college education has created a large opportunity for data scientists to uncover ways in which student's emotions are affected and the dynamic nature of their existence.  For this project, I intend to address two separate questions:  *How do emotions in high school students at time t affect their emotions at time t+1?* & *How does the weather affect student's emotions at a given time period?*  Insights gained from these analyses can affect the way teachers think about their students emotions, and further improve and optomize pre-college education.
+
+## The Dataset and Programming Language
+
+In order to find a dataset that would help in answering the above questions, I collaborated with Julia Moeller in the Emotional Intelligence department.  With her help, I procured a dataset of emotional responses from 472 different high school students in the Connecticut area (18,610 responses in total).  Students were prompted to record their emotions three times per school day on their cell phone from May 9, 2016 to June 10, 2016.  The average student age was 15.8, with 71.2% of sample responses coming from females.  Grade levels are fairly equally represented, with the exception of 13.1% of responses coming from high school seniors (average: 25%).  13.8% of students came from low-income schools, and 86.2% came from middle-to-high income schools.  Students were offered a $40 Amazon gift card if they participated in more than 90% of the available surveys.
+
+In answering the second part of my question, I needed to obtain detailed weather reports.  To achieve this, I requested exports from the National Oceanic and Atmospheric Association (NOAA) https://www.ncdc.noaa.gov/wct/.  In addition, I retrieved humidity and visibility measures from Weather Underground https://www.wunderground.com/.  I chose to examine weather from Meriden Markham Municipal Airport and Sikorsky Municipal Airport, as one of those locations fell within 15 miles from all of the schools surveyed.
+
+Almost all data analysis is performed using the R statistical computing language, with RStudio as an IDE.  However, some network analysis and visualization is performed by using Gephy.
+
+**NOTE:**  For brevity's sake, some non-essential code will not be included in this document.  However, a full RMarkdown script containing all code will come attached to this report.
+
+## Part 1: Time-Series Emotional Management
+
+Before I would be able to run any analysis on the datset.  Substantial data cleaning had to be performed, in order to get the data into an operable state.  One row of data is equivalent to one survey result.
+
+```{r read in data, echo=TRUE}
+## Reading in data from SPSS file and subsetting with columns that are necessary 
+## install.packages("foreign")
+library(foreign) #Library that helps to read in SPSS files
+options(warn=-1) #Non-vital warnings are supressed
+x <- read.spss(file = "dataset.sav", to.data.frame = T)
+y <- x[x$BG_OR_ESM=="ESM",]
+beep <- y[,709:740]
+beep[6,]  # An example of a row of data
+```
+
+Next, emotions are anonymized A-P, and a columns A2-P2 are intialized.  A2-P2 will contain a participant's emotion A-P at time *t+1*.  The **date_coded** column of the data frame will be used shortly to identify the relative date of an individuals series of responses.
+
+```{r Anonymizing emotions, creating new columns, echo=FALSE}
+## These are the new columns we are creating
+beep$date_coded <- NA
+beep$session_char <- as.character(beep$Session_Name)
+beep$A2 <- NA
+beep$B2 <- NA
+beep$C2 <- NA
+beep$D2 <- NA
+beep$E2 <- NA
+beep$F2 <- NA
+beep$G2 <- NA
+beep$H2 <- NA
+beep$I2 <- NA
+beep$J2 <- NA
+beep$K2 <- NA
+beep$L2 <- NA
+beep$M2 <- NA
+beep$N2 <- NA
+beep$O2 <- NA
+beep$P2 <- NA
+
+## Renaming old columns
+library(plyr)
+beep <- rename(beep, c("enthusiast_ESM" = "A",
+            "happy_ESM" = "B",
+            "interested_ESM" = "C",
+            "curious_ESM" = "D",
+            "calm_ESM" = "E",
+            "relaxed_ESM" = "F",
+            "frustrated_ESM" = "G",
+            "anxious_ESM" = "H",
+            "afraid_ESM" = "I",
+            "tired_ESM" = "J",
+            "sad_ESM" = "K",
+            "bored_ESM" = "L",
+            "stressed_ESM" = "M",
+            "challenge_ESM" = "N",
+            "skills_ESM" = "O",
+            "choice" = "P"))
+```
+
+Some entries were taken in the evening, however since the focus is to examine student's emotions in an education setting, those entries are removed.
+```{r Removing evening entries, echo=FALSE}
+## Removing Evening Entries
+rem <- c()
+for(i in 1: nrow(beep)){
+  if(beep$session_char[i] == unique(beep$session_char)[2] | 
+     beep$session_char[i]== unique(beep$session_char)[4]) {
+    rem <- c(rem,i)
+  }
+}
+beep <- beep[-rem,]
+```
+
+Next, the data frame is split into a list, sorted by their participant ID.  This ID is a way to collate all of the ESM responses from a given individual.
+```{r Splitting Entiries By Participant, echo=TRUE }
+beep2 <- split(beep,beep$Participant)
+```
+
+The loop below fills in the **date_coded** column of the data frame, starting with '1' for each survey response recorded on the day a participant began the survey.  An example Date vs. **date_coded** vector for a participant can be found below.  This transormation just makes it easier to calculate *t vs. t+1* correlations.
+
+```{r Loop to Create Dates, echo=TRUE}
+## Coding dates
+M <- length(beep2) # Number of participants, 472
+for(i in 1:M){
+  N <- dim(beep2[[i]])[1] # Number of responses from an individual 'i'
+  temp <- 1 # To signify 1st entry from a survey 
+  init <- as.numeric(beep2[[i]]$Date[1]) # The first date that someone responds to a survey
+  for(j in 1:N){
+    tempdate <- as.numeric(beep2[[i]]$Date[j])
+    if(tempdate > init){ #If the date on entry j is the next day
+      init <- tempdate # The counter 'init' become the new date
+      temp <- temp + 1 
+    }
+    beep2[[i]]$date_coded[j] <- temp
+  }
+}
+beep2[[4]]$Date[1:10]
+beep2[[4]]$date_coded[1:10]
+```
+
+Looping through each participant and then their survey responses, A2-P2 values are recorded.  If consecutive entries occur on different days, then A2-P2 are not recorded, since the interest is more-focused on within-day relationship between emotions.  Including inter-day emotional carryover could pose problems to any underlying conclusions the data may present.
+```{r Filling in Emotions at t+1, echo=TRUE}
+## Loop for filling in emotions at time t+1
+for(i in 1:M){ # Number of participants
+  N <- dim(beep2[[i]])[1] # Number of responses from participant 'i'
+  if(N > 1){ # Cannot record emotion at t+1 if there is only one response
+    for(j in 1:(N-1)){
+      if(beep2[[i]]$date_coded[j]==
+         beep2[[i]]$date_coded[j+1]){ # If the next session is in the same day
+        beep2[[i]][j,35:50] <- 
+          beep2[[i]][(j+1),16:31]  # Todays A2-P2 equals next session's A-P
+      }
+    }
+  }
+}
+```
+
+In order to interpret how well certain emotions are at predicting others, a coefficient matrix is created.  This matrix records all $$ \beta $$ coefficient values of the linear regression: $$ E_{t+1} = \beta*E_t + C $$ for all emotion combinations A-P.  Coefficients with a significance level below 0.05 are removed.
+
+```{r Time Series Coefficient Matrix, echo=FALSE}
+## Turning the list back into a data frame so correlations can be run
+df2 <- do.call(rbind.data.frame, beep2)
+
+## Selecting only the emotions at time t and emotions at time t+1
+df_final <- df2[,c(3,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,35,
+                   36,37,38,39,40,41,42,43,44,45,46,47,48,49,50)]
+
+## Creating coefficient matrix
+t_val <- matrix(nrow=16,ncol=16)
+regression_final <- matrix(nrow=16,ncol=16)
+len <- 16
+participant <- df_final$Participant
+for(i in 1:len){
+  temp1 <- df_final[,i+1]
+  for(j in 1:len){
+    temp2 <- df_final[,j+17]
+    tempdf <- data.frame(temp1,temp2,participant)
+    sb <- lm(temp2 ~ temp1, data = tempdf)
+    regression_final[i,j] <- sb$coefficients[2]
+    sb2 <- summary(sb)[4]
+    t_val[i,j] <- sb2[[1]][2,4]
+  }
+}
+not_sig <- which(abs(t_val)>0.05)
+regression_final[not_sig] <- 0
+rownames(regression_final) <- c("Enthusiastic", "Happy", "Interested", "Curious", "Calm", "Relaxed", "Frustrated",
+                                "Anxious", "Afraid","Tired", "Sad", "Bored", "Stressed", "Challenged","Skilled",
+                                "Choice")
+colnames(regression_final) <- c("Enthusiastic2", "Happy2", "Interested2", "Curious2", "Calm2", "Relaxed2", "Frustrated2",
+                                "Anxious2", "Afraid2","Tired2", "Sad2", "Bored2", "Stressed2", "Challenged2","Skilled2",
+                                "Choice2")
+regression_final
+```
+
+These coefficients are now used to create a network analysis of emotions.  The network was created using the corrplot package in R.  The rows are emotions at time *t* and the columns are emotions at time *t+1*
+```{r Trying to make network yourself, echo=FALSE}
+install.packages("corrplot")
+library(corrplot)
+corrplot(regression_final,method="color")
+```
+
+## Part 2: Emotions and Weather
+
+Our next exploration hopes to glean insights about emotion dynamics at different types of weather.  It is well-documented, however, that emotions on an individual level can be caused by many things, so we must proceed with caution as we attempt to draw our conclusions.
+
+Before the data can be analyzed, the weather dataset must be merged with the ESM dataset.  In order to merge weather data and ESM data, each ESM row was given an ID to determine which airport they would be sourcing the data from.  This ID was based off of school.  Columns were then created in the original ESM dataset to bring in the weather data.  Weather & ESM data would be matched by date, and then empty weather columns in the ESM datset would source their values from the weather data at a gien airport at a given date.
+
+```{r Multiplot function, echo=F}
+#############################  Multiple Plot Function  #############################################
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+  
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+  
+  numPlots = length(plots)
+  
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                     ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+  
+  if (numPlots==1) {
+    print(plots[[1]])
+    
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+    
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+      
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+################################ Exploration #####################################################
+```
+```{r Reading in dataset, echo=F}
+library(foreign)
+#setwd("~/Documents/EI Senior Project")
+
+kids <- read.spss(file = "dataset.sav", to.data.frame = T)
+esm <- kids[kids$BG_OR_ESM=="ESM",]
+weather <- read.csv("weather.csv", as.is=T)
+extra <- read.csv("weather_extra.csv", as.is=T)
+
+
+#Use Meriden Markham Municipal Airport for Chesire Kids
+#Use Sikorsky Memorial Airport for Trumbull, Bassick, and FW, Kids
+
+# Just getting the data we need from the two airports
+weather <- weather[weather$STATION_NAME %in% c("IGOR I SIKORSKY MEMORI AIRPORT CT US", 
+                                               "MERIDEN MARKHAM MUNICIPAL AIRPORT CT US"),]
+
+## Getting weather date into proper form
+weather$date2 <- NA
+weather <- transform(weather, date2 = as.Date(as.character(weather$DATE), "%Y%m%d"))
+esm <- transform(esm, date2 = as.Date(as.character(esm$Date), format = "%m/%d/%Y"))
+
+
+
+## Matching up dates on ESM and weather data
+
+## Adding 2000 years to ESM dates
+for(i in 1:nrow(esm)){
+  d <- as.POSIXlt(esm$date2[i])
+  d$year <- d$year + 2000
+  esm$date2[i] <- d
+}
+esm$date2 <- as.Date(esm$date2)
+
+## Different weather for different airports
+weatherI <- weather[weather$STATION_NAME=="IGOR I SIKORSKY MEMORI AIRPORT CT US",]
+weatherM <- weather[weather$STATION_NAME== "MERIDEN MARKHAM MUNICIPAL AIRPORT CT US",]
+
+## Extra columns that were sourced from Weather Underground and not NOAA
+weatherI$humidity <- extra$I_Humidity
+weatherM$humidity <- extra$M_Humidity
+weatherI$visibility <- extra$I_Visibility
+weatherM$visibility <- extra$M_Visibility
+
+esm$airport <- NA
+esm$uID <- NA
+for(i in 1:nrow(esm)){
+  if(esm$SCHOOL_ESM[i]=="Chesire"){  # Chesire used weather data from Markham Airport
+    esm$airport[i] <- 2
+    esm$uID[i] <- which(weatherM$date2==esm$date2[i])
+  }
+  else{
+    esm$airport[i] <- 1
+    esm$uID[i] <- which(weatherM$date2==esm$date2[i])  # Other schools used data from Sikorsky Airport
+  }
+}
+
+## Moving weather data into esm dataframe
+esm$station <- NA
+esm$precip <- NA
+esm$snowdepth <- NA
+esm$snowfall <- NA
+esm$tempavg <- NA
+esm$tempmax <- NA
+esm$tempmin <- NA
+esm$tempobs <- NA
+esm$windavg <- NA
+esm$peakgust <- NA
+esm$blowingsnow <- NA
+esm$fog <- NA
+esm$fogheavy <- NA
+esm$smoke <- NA
+esm$thunder <- NA
+esm$humidity <- NA
+esm$visibility <- NA
+
+for(i in 1:nrow(esm)){
+  if(esm$airport[i]==1){
+    esm$station[i] <- weatherI$STATION_NAME[esm$uID[i]]
+    esm$precip[i] <- weatherI$PRCP[esm$uID[i]]
+    esm$snowdepth[i] <- weatherI$SNWD[esm$uID[i]]
+    esm$snowfall[i] <- weatherI$SNOW[esm$uID[i]]
+    esm$tempavg[i] <- weatherI$TAVG[esm$uID[i]]
+    esm$tempmax[i] <- weatherI$TMAX[esm$uID[i]]
+    esm$tempmin[i] <- weatherI$TMIN[esm$uID[i]]
+    esm$tempobs[i] <- weatherI$TOBS[esm$uID[i]]
+    esm$windavg[i] <- weatherI$AWND[esm$uID[i]]
+    esm$peakgust[i] <- weatherI$PGTM[esm$uID[i]]
+    esm$blowingsnow[i] <- weatherI$WT09[esm$uID[i]]
+    esm$fog[i] <- weatherI$WT01[esm$uID[i]]
+    esm$fogheavy[i] <- weatherI$WT02[esm$uID[i]]
+    esm$smoke[i] <- weatherI$WT08[esm$uID[i]]
+    esm$thunder[i] <- weatherI$WT03[esm$uID[i]]
+    esm$visibility[i] <- weatherI$visibility[esm$uID[i]]
+    esm$humidity[i] <- weatherI$humidity[esm$uID[i]]
+  }
+  else{
+    esm$station[i] <- weatherM$STATION_NAME[esm$uID[i]]
+    esm$precip[i] <- weatherM$PRCP[esm$uID[i]]
+    esm$snowdepth[i] <- weatherM$SNWD[esm$uID[i]]
+    esm$snowfall[i] <- weatherM$SNOW[esm$uID[i]]
+    esm$tempavg[i] <- weatherM$TAVG[esm$uID[i]]
+    esm$tempmax[i] <- weatherM$TMAX[esm$uID[i]]
+    esm$tempmin[i] <- weatherM$TMIN[esm$uID[i]]
+    esm$tempobs[i] <- weatherM$TOBS[esm$uID[i]]
+    esm$windavg[i] <- weatherM$AWND[esm$uID[i]]
+    esm$peakgust[i] <- weatherM$PGTM[esm$uID[i]]
+    esm$blowingsnow[i] <- weatherM$WT09[esm$uID[i]]
+    esm$fog[i] <- weatherM$WT01[esm$uID[i]]
+    esm$fogheavy[i] <- weatherM$WT02[esm$uID[i]]
+    esm$smoke[i] <- weatherM$WT08[esm$uID[i]]
+    esm$thunder[i] <- weatherM$WT03[esm$uID[i]]
+    esm$humidity[i] <- weatherM$humidity[esm$uID[i]]
+    esm$visibility[i] <- weatherM$visibility[esm$uID[i]]
+  }
+}
+
+```
+
+Now that the data is cleaned and merged it is time to begin exploration on the dataset. This set contains fourteen emotion measures and over twenty weather variables per observation, so we must hone our efforts.  A two-pronged exploration approach is taken: numerical and visual.  Using the mean emotion score as an initial measurement parameter, tables of means are constructed for each emotion at different: 1) average daily temperatures 2) daily humidity levels 3) daily visibility levels and 4) daily precipitation levels (rain).  Then using the ggplot2 graphics package, these means are laid out on four separate plots in an effort to narrow the lens of focus.
+
+Below is an example of how the means are calculated and laid out at the various temperatures.  Code for other weather parameters is included in the R markdown.
+```{r Mean tables at different Weather Parameters, echo =TRUE}
+
+cols <- 17
+count <- 1
+temps <- unique(esm$tempavg)  # All the unique temperatures recorded
+temps
+em_avg_temp <- matrix(ncol = cols,nrow=length(temps)) # Creating empty matrix
+for(i in temps){
+  em_avg_temp[count,1] <- i # First row is the temperature
+  em_avg_temp[count,2] <- length(which(esm$tempavg==i)) # Second is # of observations
+  em_avg_temp[count,3:cols] <- 
+    colMeans(esm[esm$tempavg==i,724:738], na.rm=T) #Column means are taken from subsetted data
+  count <- count+1 # Move onto the next row in matrix
+}
+em_avg_temp <- em_avg_temp[order(em_avg_temp[,1]),] # Order matrix by ascending temp
+em_avg_temp_df <- as.data.frame(em_avg_temp) # Make it a dataframe
+colnames(em_avg_temp_df) <- c("tempavg","num_obs",names(esm)[724:738]) #Naming columns
+
+em_avg_temp_df
+```
+
+```{r More Mean Tables, echo=FALSE}
+
+## Means of emotions at different visiblity levels
+count <- 1
+temps <- unique(esm$visibility)
+em_avg_vis <- matrix(ncol = cols,nrow=length(temps))
+for(i in temps){
+  em_avg_vis[count,1] <- i
+  em_avg_vis[count,2] <- length(which(esm$visibility==i))
+  em_avg_vis[count,3:cols] <- colMeans(esm[esm$visibility==i,724:738], na.rm=T)
+  count <- count+1
+}
+em_avg_vis <- em_avg_vis[order(em_avg_vis[,1]),]
+em_avg_vis_df <- as.data.frame(em_avg_vis)
+colnames(em_avg_vis_df) <- c("visiblity","num_obs",names(esm)[724:738])
+em_avg_vis_df
+
+
+## Means of emotions at different humidity levels
+count <- 1
+temps <- unique(esm$humidity)
+em_avg_hum <- matrix(ncol = cols,nrow=length(temps))
+for(i in temps){
+  em_avg_hum[count,1] <- i
+  em_avg_hum[count,2] <- length(which(esm$humidity==i))
+  em_avg_hum[count,3:cols] <- colMeans(esm[esm$humidity==i,724:738], na.rm=T)
+  count <- count+1
+}
+em_avg_hum <- em_avg_hum[order(em_avg_hum[,1]),]
+em_avg_hum_df <- as.data.frame(em_avg_hum)
+colnames(em_avg_hum_df) <- c("humidity","num_obs",names(esm)[724:738])
+em_avg_hum_df
+
+
+## Means of emotions at different rain levels
+count <- 1
+temps <- unique(esm$precip)
+em_avg_rain <- matrix(ncol = cols,nrow=length(temps))
+for(i in temps){
+  em_avg_rain[count,1] <- i
+  em_avg_rain[count,2] <- length(which(esm$precip==i))
+  em_avg_rain[count,3:cols] <- colMeans(esm[esm$precip==i,724:738], na.rm=T)
+  count <- count+1
+}
+em_avg_rain <- em_avg_rain[order(em_avg_rain[,1]),]
+em_avg_rain_df <- as.data.frame(em_avg_rain)
+colnames(em_avg_rain_df) <- c("rain","num_obs",names(esm)[724:738])
+em_avg_rain_df
+
+```
